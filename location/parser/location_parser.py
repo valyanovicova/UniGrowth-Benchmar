@@ -1,9 +1,11 @@
-import pandas as pd
-import requests
-import time
-import aiohttp
 import asyncio
 import os
+import time
+from typing import Optional
+
+import pandas as pd
+from httpx import AsyncClient, RequestError, Response
+
 from settings import settings
 from logger import logger
 
@@ -30,44 +32,68 @@ class UniversityExcelFile:
 
 
 class GEOCoordinateParserByName:
-    def __init__(self, names: list):
+    def __init__(self, names: list[str]):
         self.names = names
+        self.url = settings.URL
+        self.semaphore = asyncio.Semaphore(50)
 
-    def get_geo_coordinates(self):
+    async def _make_request(
+            self,
+            client: AsyncClient,
+            headers: dict,
+            request_json:
+            dict
+    ) -> Optional[Response]:
+        async with self.semaphore:
+            try:
+                response = await client.post(self.url, headers=headers, json=request_json, timeout=10)
+                response.raise_for_status()
+                return response
+            except RequestError as e:
+                logger.error(f"Request to {self.source} failed with error: {e}")
+                return None
+
+    async def _process_name(self, client: AsyncClient, name: str) -> dict:
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": settings.GEOCODING_API_KEY,
+            "X-Goog-FieldMask": "places.location"
+        }
+        search_text = f"{name}".strip().replace("\xa0", " ").replace('\u200b', '')
+        request_json = {"textQuery": search_text}
+
+        response = await self._make_request(client, headers, request_json)
+        if not response:
+            logger.error(f"Something wrong with response: {response}")
+            return name, None
+        try:
+            data = response.json()
+            if "places" in data and data["places"]:
+                location = data["places"][0]["location"]
+                return name, {
+                    'lat': location["latitude"],
+                    'lng': location["longitude"]
+                }
+            logger.warning(f"No results for: {name}. Response: {data}")
+            return name, None
+        except (KeyError, IndexError, ValueError) as e:
+            logger.error(f"Invalid response for {name}: {str(e)}")
+            return name, None
+
+    async def get_geo_coordinates(self) -> dict[str, dict[str, float]]:
+        async with AsyncClient() as client:
+            tasks = [self._process_name(client, name) for name in self.names]
+            results = await asyncio.gather(*tasks)
+
         name_and_coordinates = {}
         no_coord = []
-        url =  "https://places.googleapis.com/v1/places:searchText"
-        headers = {
-                "Content-Type": "application/json",
-                "X-Goog-Api-Key": settings.GEOCODING_API_KEY,
-                "X-Goog-FieldMask": "places.location"
-            }
-        for university_name in self.names:
-            searchText = f"{university_name}".strip().replace("\xa0", " ").replace('\u200b', '')
-            request_json = {"textQuery": searchText}
-            response = requests.post(url, headers=headers, json=request_json)
-            if response.status_code != 200:
-                logger.error(f"HTTP error for {university_name}: {response.status_code}")
-                name_and_coordinates[university_name] = None
-                continue
-            data_response = response.json()
-            try:
-                logger.info(f"Trying get coordinates for {university_name}")
-                if "places" in data_response and len(data_response["places"]) > 0:
-                    location = data_response["places"][0]["location"]
-                    name_and_coordinates[university_name] = {
-                        'lat': location["latitude"],
-                        'lng': location["longitude"]
-                    }
-                else:
-                    logger.warning(f"No results for: {university_name}. Response: {data_response}")
-                    name_and_coordinates[university_name] = None
-                    no_coord.append(university_name)
-            except (KeyError, IndexError):
-                logger.error(f"Invalid structure for: {university_name}. Response: {data_response}")
-                name_and_coordinates[university_name] = None
-            time.sleep(0.5)
-        logger.info(f"Coudn't get coordinates for {no_coord}. Total item = {len(no_coord)}")
+
+        for name, result in results:
+            name_and_coordinates[name] = result
+            if result is None:
+                no_coord.append(name)
+
+        logger.info(f"Failed to get coordinates for {len(no_coord)} universities")
         return name_and_coordinates
 
     def save_to_excel_file(self, data, filename="universities_coordinates.xlsx"):
@@ -82,9 +108,15 @@ class GEOCoordinateParserByName:
         df.to_excel(save_path, index=False)
         logger.info(f"Excel-файл сохранён по пути: {save_path}")
 
-excel_file =UniversityExcelFile()
-names = excel_file.universities_names
-loc_parser = GEOCoordinateParserByName(names[:10])
-coord = loc_parser.get_geo_coordinates()
-print(coord)
+
 #loc_parser.save_to_excel_file(coord)
+async def main():
+    excel_file =UniversityExcelFile()
+    names = excel_file.universities_names
+    loc_parser = GEOCoordinateParserByName(names[:10])
+    coord = await loc_parser.get_geo_coordinates()
+    print(coord)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

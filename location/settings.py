@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     """
     FILE_PATH: Path
     GEOCODING_API_KEY: str
+    URL: str
 
     class Config:
         env_file = ".env"
