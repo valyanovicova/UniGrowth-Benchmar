@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     FILE_PATH: Path
     GEOCODING_API_KEY: str
     URL: str
+    QPS: int = 30
+    TIMEOUT: int = 30
 
     class Config:
         env_file = ".env"

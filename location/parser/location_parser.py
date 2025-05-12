@@ -1,42 +1,48 @@
 import asyncio
 import os
-import time
 from typing import Optional
+from collections import deque
 
 import pandas as pd
-from httpx import AsyncClient, RequestError, Response
+from tenacity import retry, stop_after_attempt, wait_exponential
+from httpx import (
+    AsyncClient,
+    RequestError,
+    Response,
+    NetworkError,
+    TimeoutException,
+    HTTPStatusError
+)
 
 from settings import settings
 from logger import logger
+from parser.cache import AsyncCacheFile
+from parser.excel_file import UniversityExcelFile
 
-
-class UniversityExcelFile:
-    def __init__(self):
-        self._from_data = settings.FILE_PATH
-
-    @property
-    def data(self):
-        pd.set_option("display.max_colwidth", None)
-        df = pd.read_excel(self._from_data, sheet_name="Sheet1", engine="openpyxl")
-        return df
-
-    @property
-    def universities_names(self):
-        return self.data["University Name"].to_list()
-
-    def get_name_and_location(self):
-        return self.data.set_index("University Name")["Location"].fillna(None).to_dict()
-
-    def get_name_and_address(self):
-        return self.data.set_index("University Name")["Address"].fillna(None).to_dict()
+class QPSLimiter:
+    def __init__(self, qps):
+        self.qps = qps
+        self.timestamps = deque(maxlen=qps)
+    
+    async def wait(self):
+        now = asyncio.get_event_loop().time()
+        if len(self.timestamps) >= self.qps:
+            elapsed = now - self.timestamps[0]
+            if elapsed < 1.0:
+                await asyncio.sleep(1.0 - elapsed)
+        self.timestamps.append(now)
 
 
 class GEOCoordinateParserByName:
     def __init__(self, names: list[str]):
         self.names = names
         self.url = settings.URL
-        self.semaphore = asyncio.Semaphore(50)
+        self.semaphore = asyncio.Semaphore(settings.QPS)
+        self.timeout = settings.TIMEOUT
+        self.qps_limiter = QPSLimiter(50)
+        self.cache = AsyncCacheFile()
 
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=30))
     async def _make_request(
             self,
             client: AsyncClient,
@@ -45,15 +51,27 @@ class GEOCoordinateParserByName:
             dict
     ) -> Optional[Response]:
         async with self.semaphore:
-            try:
-                response = await client.post(self.url, headers=headers, json=request_json, timeout=10)
-                response.raise_for_status()
-                return response
-            except RequestError as e:
-                logger.error(f"Request to {self.source} failed with error: {e}")
-                return None
+
+            logger.debug(
+                f"Sending request to {self.url}\n"
+                f"Headers: {headers}\n"
+                f"json: {request_json}"
+            )
+            await self.qps_limiter.wait()
+            response = await client.post(
+                self.url,
+                headers=headers,
+                json=request_json,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            return response
 
     async def _process_name(self, client: AsyncClient, name: str) -> dict:
+
+        if await self.cache.contains(name):
+            return name, await self.cache.get(name)
+
         headers = {
             "Content-Type": "application/json",
             "X-Goog-Api-Key": settings.GEOCODING_API_KEY,
@@ -61,19 +79,35 @@ class GEOCoordinateParserByName:
         }
         search_text = f"{name}".strip().replace("\xa0", " ").replace('\u200b', '')
         request_json = {"textQuery": search_text}
-
-        response = await self._make_request(client, headers, request_json)
-        if not response:
-            logger.error(f"Something wrong with response: {response}")
-            return name, None
+        try:
+            response = await self._make_request(client, headers, request_json)
+        except HTTPStatusError as e:
+                logger.error(f"Error: {e} for {request_json}")
+                raise
+        except RequestError as e:
+            logger.error(
+                f"Request to {self.url} with search params: {request_json} failed with error: {e}"
+            )
+            return None
+        except TimeoutException:
+            logger.error(f"Timeout: Not response in {self.timeout}")
+            return None
+        except NetworkError:
+            logger.error("Check network connection")
+            raise
+        if response is None:
+            logger.error(f"Response is None for {search_text}")
+            return None
         try:
             data = response.json()
             if "places" in data and data["places"]:
                 location = data["places"][0]["location"]
-                return name, {
+                result = {
                     'lat': location["latitude"],
                     'lng': location["longitude"]
                 }
+                await self.cache.set(name, result)
+                return name, result
             logger.warning(f"No results for: {name}. Response: {data}")
             return name, None
         except (KeyError, IndexError, ValueError) as e:
@@ -93,7 +127,8 @@ class GEOCoordinateParserByName:
             if result is None:
                 no_coord.append(name)
 
-        logger.info(f"Failed to get coordinates for {len(no_coord)} universities")
+        logger.info(f"Failed to get coordinates for {len(no_coord)} universities\n\
+                    {no_coord}")
         return name_and_coordinates
 
     def save_to_excel_file(self, data, filename="universities_coordinates.xlsx"):
@@ -106,16 +141,16 @@ class GEOCoordinateParserByName:
         os.makedirs(output_dir, exist_ok=True)
         save_path = os.path.join(output_dir, filename)
         df.to_excel(save_path, index=False)
-        logger.info(f"Excel-файл сохранён по пути: {save_path}")
+        logger.info(f"Excel-file was saved: {save_path}")
 
 
-#loc_parser.save_to_excel_file(coord)
 async def main():
     excel_file =UniversityExcelFile()
     names = excel_file.universities_names
-    loc_parser = GEOCoordinateParserByName(names[:10])
+    loc_parser = GEOCoordinateParserByName(names)
     coord = await loc_parser.get_geo_coordinates()
-    print(coord)
+    #await asyncio.to_thread(loc_parser.save_to_excel_file, coord)
+    loc_parser.save_to_excel_file(coord)
 
 
 if __name__ == "__main__":
