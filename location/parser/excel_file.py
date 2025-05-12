@@ -2,8 +2,8 @@ import os
 
 import pandas as pd
 
-from settings import settings
-from logger import logger
+from config.settings import settings
+from config.logger import logger
 
 
 class UniversityExcelFile:

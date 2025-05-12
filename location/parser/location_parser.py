@@ -12,8 +12,8 @@ from httpx import (
     HTTPStatusError
 )
 
-from settings import settings
-from logger import logger
+from config.settings import settings
+from config.logger import logger
 from parser.cache import AsyncCacheFile
 from parser.excel_file import UniversityExcelFile
 
