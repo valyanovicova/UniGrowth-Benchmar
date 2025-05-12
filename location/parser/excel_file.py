@@ -26,7 +26,7 @@ class UniversityExcelFile:
     def get_name_and_address(self):
         return self.data.set_index("University Name")["Address"].fillna(None).to_dict()
 
-    def save_to_excel_file(self, data, filename="universities_coordinates.xlsx"):
+    def save_to_excel_file(self, data: dict, filename: str = "universities_coordinates.xlsx"):
         df = pd.DataFrame([
             {"university_name": name, "latitude": coord["lat"], "longitude": coord["lng"]}
             for name, coord in data.items() if coord
