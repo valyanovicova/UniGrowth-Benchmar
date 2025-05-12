@@ -1,9 +1,7 @@
 import asyncio
-import os
 from typing import Optional
 from collections import deque
 
-import pandas as pd
 from tenacity import retry, stop_after_attempt, wait_exponential
 from httpx import (
     AsyncClient,
@@ -132,25 +130,13 @@ class GEOCoordinateParserByName:
                     {no_coord}")
         return name_and_coordinates
 
-    def save_to_excel_file(self, data, filename="universities_coordinates.xlsx"):
-        df = pd.DataFrame([
-            {"university_name": name, "latitude": coord["lat"], "longitude": coord["lng"]}
-            for name, coord in data.items() if coord
-        ])
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        output_dir = os.path.join(base_dir, "..", "outputs")
-        os.makedirs(output_dir, exist_ok=True)
-        save_path = os.path.join(output_dir, filename)
-        df.to_excel(save_path, index=False)
-        logger.info(f"Excel-file was saved: {save_path}")
-
 
 async def main():
     excel_file = UniversityExcelFile()
     names = excel_file.universities_names
     loc_parser = GEOCoordinateParserByName(names)
     coord = await loc_parser.get_geo_coordinates()
-    loc_parser.save_to_excel_file(coord)
+    excel_file.save_to_excel_file(coord)
 
 
 if __name__ == "__main__":

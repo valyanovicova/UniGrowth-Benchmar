@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     FILE_PATH: Path
     GEOCODING_API_KEY: str
     URL: str
+    CACHE_FILE: Path
     QPS: int = 30
     TIMEOUT: int = 30
 

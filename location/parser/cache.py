@@ -1,19 +1,19 @@
 import json
 import asyncio
-from pathlib import Path
 
 import aiofiles
 
 from logger import logger
+from settings import settings
 
 
 class AsyncCacheFile:
-    CACHE_FILE = Path("geo_cache.json")
     _lock = asyncio.Lock()
 
     def __init__(self):
         self._cache = {}
         self._loaded = False
+        self.CACHE_FILE = settings.CACHE_FILE
 
     async def load(self):
         if self._loaded:
@@ -32,6 +32,7 @@ class AsyncCacheFile:
 
     async def save(self):
         async with self._lock:
+            self.CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
             async with aiofiles.open(self.CACHE_FILE, mode='w') as f:
                 await f.write(json.dumps(self._cache))
 

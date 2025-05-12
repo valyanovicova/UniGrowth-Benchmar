@@ -1,5 +1,9 @@
+import os
+
 import pandas as pd
+
 from settings import settings
+from logger import logger
 
 
 class UniversityExcelFile:
@@ -21,3 +25,15 @@ class UniversityExcelFile:
 
     def get_name_and_address(self):
         return self.data.set_index("University Name")["Address"].fillna(None).to_dict()
+
+    def save_to_excel_file(self, data, filename="universities_coordinates.xlsx"):
+        df = pd.DataFrame([
+            {"university_name": name, "latitude": coord["lat"], "longitude": coord["lng"]}
+            for name, coord in data.items() if coord
+        ])
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        output_dir = os.path.join(base_dir, "..", "outputs")
+        os.makedirs(output_dir, exist_ok=True)
+        save_path = os.path.join(output_dir, filename)
+        df.to_excel(save_path, index=False)
+        logger.info(f"Excel-file was saved: {save_path}")
