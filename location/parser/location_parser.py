@@ -19,11 +19,12 @@ from logger import logger
 from parser.cache import AsyncCacheFile
 from parser.excel_file import UniversityExcelFile
 
+
 class QPSLimiter:
     def __init__(self, qps):
         self.qps = qps
         self.timestamps = deque(maxlen=qps)
-    
+
     async def wait(self):
         now = asyncio.get_event_loop().time()
         if len(self.timestamps) >= self.qps:
@@ -82,8 +83,8 @@ class GEOCoordinateParserByName:
         try:
             response = await self._make_request(client, headers, request_json)
         except HTTPStatusError as e:
-                logger.error(f"Error: {e} for {request_json}")
-                raise
+            logger.error(f"Error: {e} for {request_json}")
+            raise
         except RequestError as e:
             logger.error(
                 f"Request to {self.url} with search params: {request_json} failed with error: {e}"
@@ -145,11 +146,10 @@ class GEOCoordinateParserByName:
 
 
 async def main():
-    excel_file =UniversityExcelFile()
+    excel_file = UniversityExcelFile()
     names = excel_file.universities_names
     loc_parser = GEOCoordinateParserByName(names)
     coord = await loc_parser.get_geo_coordinates()
-    #await asyncio.to_thread(loc_parser.save_to_excel_file, coord)
     loc_parser.save_to_excel_file(coord)
 
 
